@@ -1,0 +1,320 @@
+
+服务器装系统
+	ubuntu 12.04 server 64
+
+
+
+
+
+一	搭建 gitosis 服务器
+	
+1	安装 git
+	sudo apt-get install git-core	
+	
+2	安装 gitosis
+	sudo apt-get install python-setuptools
+
+	mkdir gitosis_src
+	cd gitosis_src
+
+	获取gitosis，
+		注意：这里使用的 gitosis 版本，不是官方的，使用的是 蒋鑫 的改进版本
+	git clone git://github.com/ossxp-com/gitosis.git
+	cd gitosis
+	安装
+	sudo python setup.py install
+
+3	创建专用用户
+	su root
+	adduser --system --shell /bin/bash --disabled-password --group git
+	adduser git ssh
+
+4	gitosis 服务初始化
+
+	cd /home/zhongguomin/.ssh
+	scp id_rsa.pub topwise@192.168.1.33:/tmp/
+
+	/home/git
+	gitosis-init < /tmp/id_rsa.pub 
+	执行后，在当前目前产生两个文件夹 gitosis, repositories
+
+	chmod a+x repositories/gitosis-admin.git/hooks/post-update
+
+5	管理员克隆 gitosis-admin 管理库
+	
+	git clone git@192.168.1.33:gitosis-admin.git
+	得到如下目录
+		gitosis-admin/
+		├── gitosis.conf
+		└── keydir
+			└── zhongguomin.pub
+
+6	创建新仓库
+	
+	vim gitosis.conf
+	加入如下
+		# ------ Code repository: project_1 ------
+		[group project_1-admin]
+		members = @gitosis-admin
+		admin = project_1
+
+		[group project_1-devloper]
+		members = zhongguomin
+		writable = project_1
+
+		[group project_1-reader]
+		members = @all
+		readonly = project_1
+		# -------------------------------------
+
+	git add gitosis.conf
+	git commit -m "Add new repository: project_1"
+	git push
+
+	创建 project_1 仓库
+	mkdir project_1
+	cd project_1
+	git init
+	touch README
+	git add README
+	git commit -m "initialize porject_1"
+
+	git remote add origin git@192.168.1.33:project_1.git
+	git push origin master
+
+
+7	新增用户与授权
+	
+	假设新增用户 test
+	/home/test
+	ssh-keygen
+
+	cp .ssh/id_rsa.pub ....gitosis-admin/keydir/
+	mv id_rsa.pub test.pub
+
+	vim gitosis.conf，在仓库 project_1 中加入 test 用户
+		[group project_1-devloper]
+		members = zhongguomin test
+
+	git add gitosis.conf
+	git add keydir/test.pub
+	git commit -m "Add user test at project_1"
+	git push
+	
+
+8	用户下载仓库
+	git clone git@192.168.1.33:project_1.git
+	
+
+
+
+
+二	repo 服务器的搭建步骤
+
+1	安装git dameon
+	sudo apt-get install git-daemon-run
+	
+2	设置仓库目录
+	修改/etc/sv/git-daemon/run，配置git tree的目录以及共享目录
+
+	#!/bin/sh
+	exec 2>&1
+	echo 'git-daemon starting.'
+	exec chpst -ugitdaemon \
+    "$(git --exec-path)"/git-daemon --verbose --reuseaddr --export-all \
+    --base-path=/home/git /home/git
+
+
+------------------- 来自网上资料，未验证 -------------------------------
+3	Run following commands to initialized manifest.git repository on the server machine
+
+	mkdir repositories
+	cd repositories
+	git init --bare manifest.git
+
+4	Run following commands to initialized a test git repository in the same path
+
+	cd repositories
+	git init --bare project1.git
+
+5	Run following command on the server machine with administrator privilege
+
+	sudo gedit /etc/sv/git-daemon/run
+	Modify the last line to:
+
+	exec git-daemon --verbose --enable=receive-pack --export-all --base-path=/home/seker/repositories
+	
+	Reboot the machine
+
+6	Customize manifest.git
+
+	Login a client machine, run following command to clone manifest.git repository:
+
+	mkdir MyRepo
+	cd MyRepo
+
+	git clone seker@192.168.5.141:repositories/manifest.git
+
+	cd manifest
+	Create a default.xml file with following content:
+
+	<?xml version="1.0" encoding="UTF-8"?>
+	<manifest>
+		<remote name="korg"  fetch="git://192.168.5.141/" review="review.source.android.com" />
+		<default revision="master" remote="korg" />
+		<project path="project1" name="project1" />
+	</manifest>
+
+
+	--------------------------------------
+	首先repo是要管理几个git的，我们先创建两个git， bootable.git binoic.git
+	git的管理需要一个manifests.git来规划。
+	manifests.git 里面会有一个default.xml的文件。这里面配置来的工程的信息。比如
+
+	<?xml version="1.0" encoding="UTF-8"?>
+	<manifest>
+		<remote  name="origin" fetch="git@192.9.50.173:testrepo/" />
+		<default revision="master" remote="origin" />
+		<project patch="bionic" name="bionic" />
+		<project patch="bootable" name="bootable" />
+	</manifest>
+
+	这里面的格式大家照这写吧。
+	--------------------------------------
+
+
+	Run following command to commit default.xml file
+	
+	git add --all
+	git commit -a -m "add default.xml"
+	git push --all
+
+
+7	Customize Project1.git
+	Login a client machine, run following command to clone project1.git repository:
+
+	cd MyRepo
+	git clone seker@192.168.5.141:repositories/project1.git
+
+	cd project1
+
+	echo "Hello Project1" > Hello.txt
+
+	Run following command to commit Hello.txt file
+
+	git add --all
+	git commit -a -m "add Hello.txt"
+	git push --all
+
+8	Test the repo server
+	Run following command on the client machine side.
+
+	mkdir bin
+	curl http://android.git.kernel.org/repo > ~/bin/repo
+
+	chmod a+x ~/bin/repo
+	Export ~/bin to system enviroment path.
+
+	mkdir MyProject 
+	cd MyProject
+	repo init -u git://192.168.5.141/manifest.git
+	repo sync
+
+
+9	repo 解释
+
+	curl其实是一个下载工具，下面这个命令其实就是把网络上一个文件下载到了本地bin目录下。
+	curl http://android.git.kernel.org/repo > ~/bin/repo
+
+	我们通过chmod a+x ~/bin/repo 使得repo文件可以执行。
+
+	这个文件其实很关键，它相当于启动Repo的启动器。但是，很多初学者都进入了一个误区，认为repo文件就是Repo的全部。
+	其实这是不对的，当执行下面这个命令时：repo其实做了很多很多的事情.....
+
+	repo init -u git://192.168.5.141/manifest.git
+
+	1、首先它创建一个.repo的文件夹，这个文件夹是隐藏的。接下来Repo所做的事情都是在.repo这个文件夹底下进行的。
+	2、它从网上下载一个repo.git的工程，这个工程才是整整的Repo的全部，也就是我们前面说过的"git命令脚本工程"
+	3、最后它把"-u git://192.168.5.141/manifest.git"传递给了repo工程。
+		manifest.git工程中其实只有一个文件：default.xml，这个文件记录了一个工程列表。
+		当我们执行repo sync时，Repo通过解析default.xml这个文件，循环遍历下载所有的工程，从而达到统一管理的目的。
+
+-------------------- 来自网上资料，未验证 ------------------------------
+
+关于 repo 的理解
+	$ repo init -u URL [OPTIONS]
+	在当前目录安装repo.该命令创建一个.repo文件夹，文件夹中包含一些git仓库，这些仓库包含着repo源代码和Android manifest文件。.repo文件夹包含着
+	manifest.xml符号链接，它链接到.repo/manifests/文件夹中选定的manifest文件
+
+	可选参数：
+	   -u:指定一个获取manifest仓库(manifest repository) 的URL。The common manifest can be found at git://android.git.kernel.org/platform/manifest.git
+	   -m:选择一个仓库中的manifest文件，没有选择则默认为default.xml。
+	   -b:指定一个版本(revision),也就是一个特别的manifest-branch。
+	注释：对于以后的命令，当前目录必须是.repo目录的父目录或该父目录的子目录。
+
+
+
+-------------------- 来自网上资料，未验证 ------------------------------
+
+
+三	下载全志 repo 镜象仓库与配置
+
+1	从全志服务器下载 repo 引导脚本
+	$ git clone ssh://Topwise@61.143.53.198/git_repo/repo.git
+	
+	修改 repo/repo 文件中下面一行，将 username 替换成客户下载账号的用户名
+	REPO_URL='ssh://username@61.143.53.198/git_repo/repo.git'
+
+	把 repo 引导脚本添加到自己计算机环境变量中
+	$ cp repo/repo /usr/local/bin/repo
+	$ chmod 777 /usr/local/bin/repo
+
+
+2	下载 A13 android4.2 代码镜像仓库
+	$ mkdir android4.2
+	$ cd android4.2
+	$ mkdir android
+	$ cd android
+	$ repo init -u ssh://Topwise@61.143.53.198/git_repo/manifest.git -b a13-4.2 -m default.xml --mirror
+	$ repo sync
+
+	对应 android4.2 的 lichee 代码镜像仓库
+	$ mkdir lichee
+	$ cd lichee
+	$ repo init -u ssh://Topwise@61.143.53.198/git_repo/manifest.git -b a13-4.2 -m lichee.xml --mirror
+	$ repo sync
+
+	
+3	
+	/home/git/repositories
+	cp -r /home/topwise/allwinner_repo/a13/android_4.2/android/device/ .
+	cp -r /home/topwise/allwinner_repo/a13/android_4.2/android/platform/ .
+	cp -r /home/topwise/allwinner_repo/a13/android_4.2/android/repo.git .
+
+	mkdir lichee
+	cd lichee/
+	cp -r /home/topwise/allwinner_repo/a13/android_4.2/lichee/boot.git/ .
+	cp -r /home/topwise/allwinner_repo/a13/android_4.2/lichee/linux-3.0.git/ .
+	cp -r /home/topwise/allwinner_repo/a13/android_4.2/lichee/tools.git/ .
+	cp -r /home/topwise/allwinner_repo/a13/android_4.2/lichee/buildroot.git/ .
+	cp -r /home/topwise/allwinner_repo/a13/android_4.2/lichee/u-boot.git/ .
+
+
+	git clone --mirror ssh://Topwise@61.143.53.198/git_repo/manifest.git
+	cp -r /home/topwise/allwinner_manifest.git/ .
+	mv allwinner_manifest.git manifest.git
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
